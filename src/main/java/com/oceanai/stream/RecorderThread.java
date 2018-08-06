@@ -18,17 +18,24 @@ public class RecorderThread implements Runnable {
     private BlockingQueue<BufferedImage> bufferedImages;
     private Java2DFrameConverter converter = new Java2DFrameConverter();
     private boolean running = false;
+
+    /**
+     * 推流线程构造函数
+     * @param recordURL 推流目的地址
+     * @param bufferedImages
+     * @param width 推流分辨率宽
+     * @param height 推流分辨率高
+     */
     public RecorderThread(String recordURL, BlockingQueue<BufferedImage> bufferedImages, int width, int height) {
         this.bufferedImages = bufferedImages;
         try{
             frameRecorder = new FFmpegFrameRecorder(recordURL, 0);
-            frameRecorder.setVideoCodecName("mpeg1video");
-            frameRecorder.setFormat("mpegts");
+            frameRecorder.setVideoCodecName("mpeg1video"); //mpeg1编码,jsmpeg目前只支持mpeg1解码
+            frameRecorder.setFormat("mpegts"); //
             frameRecorder.setImageWidth(width);
             frameRecorder.setImageHeight(height);
-            //frameRecoder.setVideoBitrate(10000);
-            frameRecorder.setVideoQuality(0.8);
-            frameRecorder.setFrameRate(25);
+            frameRecorder.setVideoQuality(0.8); //图像质量
+            frameRecorder.setFrameRate(25); //播放帧率
             frameRecorder.start();
             running = true;
         } catch (Exception e) {
@@ -36,10 +43,16 @@ public class RecorderThread implements Runnable {
         }
     }
 
+    /**
+     * 开启服务
+     */
     public void start() {
         this.running = true;
     }
 
+    /**
+     * 停止服务
+     */
     public void stop() {
         this.running = false;
     }

@@ -1,4 +1,4 @@
-package com.oceanai.stream;
+package com.oceanai;
 
 import boofcv.abst.tracker.TrackerObjectQuad;
 import boofcv.factory.tracker.FactoryTrackerObjectQuad;
@@ -6,10 +6,10 @@ import boofcv.io.image.ConvertBufferedImage;
 import boofcv.struct.image.GrayU8;
 import boofcv.struct.image.ImageType;
 import com.oceanai.model.SearchFeature;
-import com.oceanai.util.FaceZmqTool;
-import com.oceanai.util.ImageUtils;
+import com.oceanai.util.*;
 import georegression.struct.shapes.Quadrilateral_F64;
-import org.bytedeco.javacv.FFmpegFrameRecorder;
+import org.bytedeco.javacv.*;
+import org.bytedeco.javacv.Frame;
 
 import java.awt.*;
 import java.awt.geom.Line2D;
@@ -18,114 +18,145 @@ import java.awt.image.BufferedImage;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
-import java.util.concurrent.BlockingQueue;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.logging.Logger;
 
-public class ProcessThread implements Runnable {
-
-    private Logger logger = Logger.getLogger(ProcessThread.class.getName());
-    private Base64.Encoder encoder = Base64.getEncoder();
-
-    //追踪相关参数
+public class Streamer implements Runnable{
+    private Logger logger = Logger.getLogger(Streamer.class.getName());
     private ImageType<GrayU8> imageType ;
     private Quadrilateral_F64[] locations;
     private TrackerObjectQuad[] trackers;
     private GrayU8 currentBoof;
-
-    private FaceZmqTool faceZmqTool = FaceZmqTool.getInstance(); //人脸检测(通过ZeroMQ调用人脸检测API)
-    private BlockingQueue<BufferedImage> bufferedImages;
-    private BlockingQueue<BufferedImage> processedImages;
-    private int minFace;
+    private FFmpegFrameGrabber grabber;
+    private FFmpegFrameRecorder frameRecoder;
+    private FaceZmqTool faceZmqTool = FaceZmqTool.getInstance();
+    private Java2DFrameConverter converter = new Java2DFrameConverter();
+    private Base64.Encoder encoder = Base64.getEncoder();
+    private int width, height;
+    private int bitrate;
+    private int minFace = 20;
     private boolean running = false;
-
-    private ProcessThread(){}
-
-    /**
-     *  处理线程构造函数
-     * @param bufferedImages 抓图缓冲队列
-     * @param recordImages 推流缓冲队列
-     * @param minFace 最小人脸检测尺寸
-     */
-    public ProcessThread(BlockingQueue<BufferedImage> bufferedImages,BlockingQueue<BufferedImage> recordImages, int minFace) {
-        this.bufferedImages = bufferedImages;
-        this.processedImages = recordImages;
-        this.minFace = minFace;
-        faceZmqTool.detectInit("tcp://192.168.1.11:5559");
+    public Streamer(String rtspURL, int width, int height) {
+        this.width = width;
+        this.height = height;
         imageType = FactoryTrackerObjectQuad.circulant(null, GrayU8.class).getImageType();
-        running = true;
+        faceZmqTool.detectInit("tcp://192.168.1.11:5559");
+        grabber = new FFmpegFrameGrabber(rtspURL);
+        frameRecoder = new FFmpegFrameRecorder("http://192.168.1.11:8081/test", 0);
+        grabber.setOption("rtsp_transport", "tcp");
+
+        frameRecoder.setVideoCodecName("mpeg1video");
+        frameRecoder.setFormat("mpegts");
+        frameRecoder.setImageWidth(width);
+        frameRecoder.setImageHeight(height);
+        //frameRecoder.setVideoBitrate(10000);
+        frameRecoder.setVideoQuality(0.8);
+        frameRecoder.setFrameRate(25);
     }
 
-    /**
-     * 开启处理线程
-     */
     public void start() {
-        this.running = true;
+        try {
+            running = true;
+            grabber.start();
+            frameRecoder.start();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
-    /**
-     * 停止处理线程
-     */
-    public void stop() {
-        this.running = false;
+    public boolean isRunning() {
+        return running;
     }
-
     @Override
     public void run() {
-        BufferedImage bufferedImage;
+        Frame frame;
+        int count = 0;
+        List<SearchFeature> searchFeatureList = new ArrayList<>(0);
+        //BufferedImage bi;
+        BufferedImage bufferedImage ;
         Graphics2D graphics2D;
+        Graphics graphics;
         byte[] bytes;
         Rectangle box;
         long start;
-        int count = 0;
-        List<SearchFeature> searchFeatureList = new ArrayList<>(0);
-        logger.info("Start to process frame");
+        //BufferedImage bufferedImage = new BufferedImage(width, height, BufferedImage.TYPE_3BYTE_BGR);
+        //System.out.println("Start grab frame");
+        logger.info("Start grab frame");
         try {
             while (running) {
                 start = System.currentTimeMillis();
-                try {
-                    Thread.sleep((long) 0.5);//先释放资源，避免cpu占用过高
-                } catch (Exception e1) {
-                    // TODO Auto-generated catch block
-                    e1.printStackTrace();
+                if ((frame = grabber.grabImage()) == null) {
+                    continue;
                 }
-                bufferedImage = bufferedImages.take();
 
-                //每一秒(25帧)检测一次人脸，后面24帧使用追踪算法追踪
-                if (count++ % 25 == 0) {
+                if (count % 25 == 0) {
+                    bufferedImage = converter.convert(frame);
+                    /*bi = converter.convert(frame);
+                    graphics = bufferedImage.getGraphics();
+                    graphics.drawImage(bi, 0, 0, width, height, null);*/
+                    graphics2D = bufferedImage.createGraphics();
+
                     bytes = ImageUtils.imageToBytes(bufferedImage, "jpg");
+
                     searchFeatureList = faceZmqTool.detect(encoder.encodeToString(bytes), minFace);
                     if (!searchFeatureList.isEmpty()) {
-                        graphics2D = bufferedImage.createGraphics();
                         faceTrackingInit(bufferedImage, searchFeatureList);
                         for (int j = 0; j < searchFeatureList.size(); j++) {
                             SearchFeature.BBox bbox = searchFeatureList.get(j).bbox;
                             box = new Rectangle(bbox.left_top.x, bbox.left_top.y, bbox.right_down.x - bbox.left_top.x, bbox.right_down.y - bbox.left_top.y);
                             draw(graphics2D, box, Color.YELLOW);
                         }
-                        logger.info("Detect " + searchFeatureList.size() + " faces from frame " + count + " time used " + (System.currentTimeMillis() - start) + " remaining " + bufferedImages.size());
+                        frame = converter.convert(bufferedImage);
+                        //ImageUtils.saveToFile(bufferedImage, "D:\\OceanAI\\gitlab\\RealtimeStream\\resources\\", "" + count, "jpg");
+                        //System.out.println("Detect faces from frame " + count + " time used " + (System.currentTimeMillis() - start));
+                        logger.info("Detect faces from frame " + count + " time used " + (System.currentTimeMillis() - start));
+                        ImageUtils.saveToFile(bufferedImage, "D:\\OceanAI\\gitlab\\SingleCamStreamMPEG\\resources\\", "" + count, "jpg");
                         graphics2D.dispose();
+                        //graphics.dispose();
                     }
+                    ++count;
                 } else {
-
                     if (!searchFeatureList.isEmpty()) {
+                        /*bi = converter.convert(frame);
+                        graphics = bufferedImage.getGraphics();
+                        graphics.drawImage(bi, 0, 0, width, height, null);*/
+                        bufferedImage = converter.convert(frame);
                         graphics2D = bufferedImage.createGraphics();
+
                         ConvertBufferedImage.convertFrom(bufferedImage, currentBoof, true);
                         for (int n = 0; n < searchFeatureList.size(); n++) {
                             trackers[n].process(currentBoof, locations[n]);
                             box = new Rectangle((int) locations[n].getA().getX(), (int) locations[n].getA().getY(), (int) (locations[n].getC().getX() - locations[n].getA().getX()), (int) (locations[n].getC().getY() - locations[n].getA().getY()));
                             draw(graphics2D, box, Color.YELLOW);
                         }
+                        //ImageUtils.saveToFile(bufferedImage, "D:\\OceanAI\\gitlab\\RealtimeStream\\resources\\", "" + count, "jpg");
 
+                        frame = converter.convert(bufferedImage);
+                        //System.out.println("Track one frame " + count + " time used " + (System.currentTimeMillis() - start));
                         logger.info("Track one frame " + count + " time used " + (System.currentTimeMillis() - start));
+                        ImageUtils.saveToFile(bufferedImage, "D:\\OceanAI\\gitlab\\SingleCamStreamMPEG\\resources\\", "" + count, "jpg");
+                        //graphics.dispose();
                         graphics2D.dispose();
                     }
+                    ++count;
                 }
-                processedImages.put(bufferedImage);
+                //Thread.sleep(40);
+
+                //frameRecoder.record(frame);
+                //System.out.println("Record frame " + count + " time used " + (System.currentTimeMillis() - start));
+                //System.out.print("is running " + running);
             }
+            grabber.stop();
+            frameRecoder.stop();
         } catch (Exception e) {
-            System.out.println(e.getMessage());
+            e.printStackTrace();
+        } finally {
+            running = false;
         }
+    }
+
+    public boolean stop() {
+        running = false;
+        return true;
     }
 
     /**
@@ -134,7 +165,9 @@ public class ProcessThread implements Runnable {
      * @param searchFeatures 检测到的人脸信息
      */
     private void faceTrackingInit(BufferedImage bufferedImage, List<SearchFeature> searchFeatures) {
-        logger.info("Tracker start to init.");
+        BufferedImage currentImage = new BufferedImage(bufferedImage.getWidth(), bufferedImage.getHeight(), BufferedImage
+                .TYPE_3BYTE_BGR);
+        //logger.log(FileLogger.TYPE.INFO, "Tracker start to init.");
         currentBoof = imageType.createImage(bufferedImage.getWidth(), bufferedImage.getHeight());
         ConvertBufferedImage.convertFrom(bufferedImage, currentBoof, true);
         locations = new Quadrilateral_F64[searchFeatures.size()];
@@ -185,4 +218,18 @@ public class ProcessThread implements Runnable {
         graphics2D.draw(lineD_2);
     }
 
+
+    private GrayU8 convert(BufferedImage currentImage, GrayU8 currentBoof, BufferedImage next) {
+        currentImage.createGraphics().drawImage(next, 0, 0, null);
+        ConvertBufferedImage.convertFrom(currentImage, currentBoof, true);
+        return currentBoof;
+    }
+
+    public static void main(String[] args) {
+        Streamer streamer = new Streamer("rtsp://admin:123456@192.168.1.69:554/unicast/c1/s0/live", 1920, 1080);
+        streamer.start();
+        new Thread(streamer).start();
+        //Thread.sleep(40000);
+        //streamer.stop();
+    }
 }

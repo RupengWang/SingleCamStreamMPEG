@@ -19,21 +19,34 @@ public class FaceZmqTool {
     private static class FaceZmpToolManager {
         private static final FaceZmqTool instance = new FaceZmqTool();
     }
+
+    /**
+     * 只有唯一一个实例
+     * @return
+     */
     public static FaceZmqTool getInstance() {
         return FaceZmpToolManager.instance;
     }
 
+    //初始化服务地址
     public boolean detectInit(String url) {
         socket = context.createSocket(ZMQ.DEALER);
         return socket.connect(url);
     }
 
-    private boolean send(String base64) {
+    /**
+     * 发送json请求
+     * @param base64
+     * @param minFace
+     * @return
+     */
+    private boolean send(String base64, int minFace) {
         try {
             JSONObject jsonParam = new JSONObject();
             jsonParam.put("api_key", "");
             jsonParam.put("interface", "5");
             jsonParam.put("image_base64", base64);
+            jsonParam.put("minface_size", minFace);
             return socket.send(jsonParam.toString().getBytes(ZMQ.CHARSET), 0);
         } catch (Exception e) {
             e.printStackTrace();
@@ -41,14 +54,19 @@ public class FaceZmqTool {
         return false;
     }
 
+    /**
+     * 接收处理结果
+     * @return
+     */
     private String receiveResult() {
         byte[] reply = socket.recv(0);
         String result = new String(reply, ZMQ.CHARSET);
         return result.replace("\u0000", "");
     }
 
-    public List<SearchFeature> detect(String base64) {
-        boolean sendResult = send(base64);
+
+    public List<SearchFeature> detect(String base64, int minFace) {
+        boolean sendResult = send(base64, minFace);
         if (sendResult) {
             String result = receiveResult();
             DetectResult detectResult = gson.fromJson(result, DetectResult.class);
