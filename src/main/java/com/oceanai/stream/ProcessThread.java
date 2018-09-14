@@ -22,6 +22,8 @@ import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.logging.Logger;
 
+import static com.oceanai.util.ImageUtils.draw;
+
 public class ProcessThread implements Runnable {
 
     private Logger logger = Logger.getLogger(ProcessThread.class.getName());
@@ -29,8 +31,8 @@ public class ProcessThread implements Runnable {
 
     //追踪相关参数
     private ImageType<GrayU8> imageType ;
-    private Quadrilateral_F64[] locations;
-    private TrackerObjectQuad[] trackers;
+    //private Quadrilateral_F64[] locations;
+    //private TrackerObjectQuad[] trackers;
     private GrayU8 currentBoof;
 
     private FaceZmqTool faceZmqTool = FaceZmqTool.getInstance(); //人脸检测(通过ZeroMQ调用人脸检测API)
@@ -51,7 +53,11 @@ public class ProcessThread implements Runnable {
         this.bufferedImages = bufferedImages;
         this.processedImages = recordImages;
         this.minFace = minFace;
-        faceZmqTool.detectInit("tcp://192.168.1.11:5559");
+        String ZMQ_ADDRESS = System.getenv("ZMQ_ADDRESS");
+        if (ZMQ_ADDRESS == null || ZMQ_ADDRESS.equals("")) {
+            ZMQ_ADDRESS = "tcp://192.168.1.11:5559";
+        }
+        faceZmqTool.detectInit(ZMQ_ADDRESS);
         imageType = FactoryTrackerObjectQuad.circulant(null, GrayU8.class).getImageType();
         running = true;
     }
@@ -79,8 +85,11 @@ public class ProcessThread implements Runnable {
         long start;
         int count = 0;
         List<SearchFeature> searchFeatureList = new ArrayList<>(0);
+        Color color = new Color(Integer.parseInt("21A4FF", 16));
         logger.info("Start to process frame");
         try {
+            Quadrilateral_F64[] locations = null;
+            TrackerObjectQuad[] trackers = null;
             while (running) {
                 start = System.currentTimeMillis();
                 try {
@@ -90,38 +99,58 @@ public class ProcessThread implements Runnable {
                     e1.printStackTrace();
                 }
                 bufferedImage = bufferedImages.take();
-
                 //每一秒(25帧)检测一次人脸，后面24帧使用追踪算法追踪
                 if (count++ % 25 == 0) {
                     bytes = ImageUtils.imageToBytes(bufferedImage, "jpg");
-                    searchFeatureList = faceZmqTool.detect(encoder.encodeToString(bytes), minFace);
+                    searchFeatureList = faceZmqTool.detect(encoder.encodeToString(bytes), 80);
+                    if (searchFeatureList == null) {
+                        logger.info("FaceZmqTool hasn't been init!");
+                        break;
+                    }
                     if (!searchFeatureList.isEmpty()) {
+                        locations = new Quadrilateral_F64[searchFeatureList.size()];
+                        trackers = new TrackerObjectQuad[searchFeatureList.size()];
                         graphics2D = bufferedImage.createGraphics();
-                        faceTrackingInit(bufferedImage, searchFeatureList);
-                        for (int j = 0; j < searchFeatureList.size(); j++) {
-                            SearchFeature.BBox bbox = searchFeatureList.get(j).bbox;
+                        int size = searchFeatureList.size();
+                        for (int j = 0; j < size; j++) {
+                            SearchFeature searchFeature = searchFeatureList.get(j);
+                            if (searchFeature.width < minFace || searchFeature.height < minFace) {
+                                System.out.println("Face number is " + searchFeatureList.size());
+                                //searchFeatureList.remove(j);
+                                searchFeatureList.set(j, null);
+                                System.out.println("Remove one face.");
+                                System.out.println("Face number is " + searchFeatureList.size());
+                                continue;
+                            }
+                            SearchFeature.BBox bbox = searchFeature.bbox;
                             box = new Rectangle(bbox.left_top.x, bbox.left_top.y, bbox.right_down.x - bbox.left_top.x, bbox.right_down.y - bbox.left_top.y);
-                            draw(graphics2D, box, Color.YELLOW);
+                            draw(graphics2D, box, color);
                         }
+
+                        faceTrackingInit(trackers, locations, bufferedImage, searchFeatureList);
                         logger.info("Detect " + searchFeatureList.size() + " faces from frame " + count + " time used " + (System.currentTimeMillis() - start) + " remaining " + bufferedImages.size());
                         graphics2D.dispose();
                     }
                 } else {
-
-                    if (!searchFeatureList.isEmpty()) {
+                    if (!searchFeatureList.isEmpty() || locations == null || trackers == null) {
                         graphics2D = bufferedImage.createGraphics();
+                        GrayU8 currentBoof = imageType.createImage(bufferedImage.getWidth(), bufferedImage.getHeight());
                         ConvertBufferedImage.convertFrom(bufferedImage, currentBoof, true);
                         for (int n = 0; n < searchFeatureList.size(); n++) {
-                            trackers[n].process(currentBoof, locations[n]);
+                            if (searchFeatureList.get(n) == null) {
+                                continue;
+                            }
+                            trackers[n].process(currentBoof, locations[n]); //内存泄漏
                             box = new Rectangle((int) locations[n].getA().getX(), (int) locations[n].getA().getY(), (int) (locations[n].getC().getX() - locations[n].getA().getX()), (int) (locations[n].getC().getY() - locations[n].getA().getY()));
-                            draw(graphics2D, box, Color.YELLOW);
+                            draw(graphics2D, box, color);
                         }
 
                         logger.info("Track one frame " + count + " time used " + (System.currentTimeMillis() - start));
                         graphics2D.dispose();
+                        currentBoof = null;
                     }
                 }
-                processedImages.put(bufferedImage);
+                processedImages.offer(bufferedImage);
             }
         } catch (Exception e) {
             System.out.println(e.getMessage());
@@ -133,56 +162,24 @@ public class ProcessThread implements Runnable {
      * @param bufferedImage 图片对象
      * @param searchFeatures 检测到的人脸信息
      */
-    private void faceTrackingInit(BufferedImage bufferedImage, List<SearchFeature> searchFeatures) {
+    private void faceTrackingInit(TrackerObjectQuad[] trackers, Quadrilateral_F64[] locations, BufferedImage bufferedImage, List<SearchFeature> searchFeatures) {
         logger.info("Tracker start to init.");
-        currentBoof = imageType.createImage(bufferedImage.getWidth(), bufferedImage.getHeight());
+        GrayU8 currentBoof = imageType.createImage(bufferedImage.getWidth(), bufferedImage.getHeight());
         ConvertBufferedImage.convertFrom(bufferedImage, currentBoof, true);
-        locations = new Quadrilateral_F64[searchFeatures.size()];
-        trackers = new TrackerObjectQuad[searchFeatures.size()];
+        /*locations = new Quadrilateral_F64[searchFeatures.size()];
+        trackers = new TrackerObjectQuad[searchFeatures.size()];*/
 
         for (int i = 0; i < searchFeatures.size(); i++) {
             trackers[i] = FactoryTrackerObjectQuad.circulant(null, GrayU8.class);
-            SearchFeature.BBox bbox = searchFeatures.get(i).bbox;
-            locations[i] = new Quadrilateral_F64(bbox.left_top.x, bbox.left_top.y, bbox.right_down.x, bbox.left_top.y, bbox.right_down.x, bbox.right_down.y, bbox.left_top.x, bbox.right_down.y);
-            trackers[i].initialize(currentBoof, locations[i]);
+            if (searchFeatures.get(i) == null) {
+                trackers[i] = null;
+                locations[i] = null;
+            } else {
+                SearchFeature.BBox bbox = searchFeatures.get(i).bbox;
+                locations[i] = new Quadrilateral_F64(bbox.left_top.x, bbox.left_top.y, bbox.right_down.x, bbox.left_top.y, bbox.right_down.x, bbox.right_down.y, bbox.left_top.x, bbox.right_down.y);
+                trackers[i].initialize(currentBoof, locations[i]);
+            }
         }
+        currentBoof = null;
     }
-
-    /**
-     * 绘制矩形框
-     * @param graphics2D
-     * @param box
-     */
-    public void draw(Graphics2D graphics2D, Rectangle box, Color color) {
-        graphics2D.setColor(color);
-        Point2D point2DA = new Point((int)box.getX(), (int)box.getY());
-        Point2D point2DB = new Point((int)(box.getX() + box.getWidth()), (int)box.getY());
-        Point2D point2DC = new Point((int)(box.getX() + box.getWidth()), (int)(box.getY() + box.getHeight()));
-        Point2D point2DD = new Point((int)box.getX(), (int)(box.getY() + box.getHeight()));
-
-        double width = box.getWidth();
-        double height = box.getHeight();
-
-        Line2D lineA_1 = new Line2D.Double(point2DA.getX(),point2DA.getY(),point2DA.getX()+width/4, point2DA.getY());
-        Line2D lineA_2 = new Line2D.Double(point2DA.getX(), point2DA.getY(), point2DA.getX(), point2DA.getY() + height/4);
-        Line2D lineB_1 = new Line2D.Double(point2DB.getX(), point2DB.getY(), point2DB.getX() - width/4, point2DA.getY());
-        Line2D lineB_2 = new Line2D.Double(point2DB.getX(), point2DB.getY(), point2DB.getX(), point2DA.getY() + height/4);
-        Line2D lineC_1 = new Line2D.Double(point2DC.getX(), point2DC.getY(), point2DC.getX(), point2DC.getY() - height/4);
-        Line2D lineC_2 = new Line2D.Double(point2DC.getX(), point2DC.getY(), point2DC.getX() - width/4, point2DC.getY());
-        Line2D lineD_1 = new Line2D.Double(point2DD.getX(), point2DD.getY(), point2DD.getX() + width/4, point2DD.getY());
-        Line2D lineD_2 = new Line2D.Double(point2DD.getX(), point2DD.getY(), point2DD.getX(), point2DD.getY() - height/4);
-
-        graphics2D.setStroke(new BasicStroke(1));
-        graphics2D.draw(box);
-        graphics2D.setStroke(new BasicStroke(4));
-        graphics2D.draw(lineA_1);
-        graphics2D.draw(lineA_2);
-        graphics2D.draw(lineB_1);
-        graphics2D.draw(lineB_2);
-        graphics2D.draw(lineC_1);
-        graphics2D.draw(lineC_2);
-        graphics2D.draw(lineD_1);
-        graphics2D.draw(lineD_2);
-    }
-
 }

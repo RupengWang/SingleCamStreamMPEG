@@ -16,15 +16,17 @@ public class StreamOriginMain {
         String rtspURL = args[0];
         String recordURL = args[1];
         BlockingQueue<BufferedImage> bufferedImages = new LinkedBlockingDeque<>();
-        int width = 1280;
+        int width = 1080;
         int height = 720;
 
         //record origin frame directly
-        Thread grab = new Thread(new GrabThread(rtspURL, bufferedImages, width, height));
+        GrabThread grabThread = new GrabThread(rtspURL, bufferedImages, width, height);
+        grabThread.start();
+        Thread grab = new Thread(grabThread, "Grabber");
 
         //you can add another thread to process the frame you grab from bufferedImages list.
 
-        Thread record = new Thread(new RecorderThread(recordURL, bufferedImages, width, height));
+        Thread record = new Thread(new RecorderThread(recordURL, bufferedImages, width, height), "Recorder");
         record.start();
         grab.start();
     }

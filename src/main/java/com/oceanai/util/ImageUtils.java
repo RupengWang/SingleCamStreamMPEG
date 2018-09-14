@@ -132,4 +132,41 @@ public class ImageUtils {
         ColorConvertOp grayOp = new ColorConvertOp(ColorSpace.getInstance(ColorSpace.CS_GRAY), null);
         return grayOp.filter(src,null);
     }
+
+	/**
+	 * 绘制矩形框
+	 * @param graphics2D
+	 * @param box
+	 */
+	public static void draw(Graphics2D graphics2D, Rectangle box, Color color) {
+		graphics2D.setColor(color);
+		Point2D point2DA = new Point((int)box.getX(), (int)box.getY());
+		Point2D point2DB = new Point((int)(box.getX() + box.getWidth()), (int)box.getY());
+		Point2D point2DC = new Point((int)(box.getX() + box.getWidth()), (int)(box.getY() + box.getHeight()));
+		Point2D point2DD = new Point((int)box.getX(), (int)(box.getY() + box.getHeight()));
+
+		double width = box.getWidth();
+		double height = box.getHeight();
+
+		Line2D lineA_1 = new Line2D.Double(point2DA.getX(),point2DA.getY(),point2DA.getX()+width/4, point2DA.getY());
+		Line2D lineA_2 = new Line2D.Double(point2DA.getX(), point2DA.getY(), point2DA.getX(), point2DA.getY() + height/4);
+		Line2D lineB_1 = new Line2D.Double(point2DB.getX(), point2DB.getY(), point2DB.getX() - width/4, point2DA.getY());
+		Line2D lineB_2 = new Line2D.Double(point2DB.getX(), point2DB.getY(), point2DB.getX(), point2DA.getY() + height/4);
+		Line2D lineC_1 = new Line2D.Double(point2DC.getX(), point2DC.getY(), point2DC.getX(), point2DC.getY() - height/4);
+		Line2D lineC_2 = new Line2D.Double(point2DC.getX(), point2DC.getY(), point2DC.getX() - width/4, point2DC.getY());
+		Line2D lineD_1 = new Line2D.Double(point2DD.getX(), point2DD.getY(), point2DD.getX() + width/4, point2DD.getY());
+		Line2D lineD_2 = new Line2D.Double(point2DD.getX(), point2DD.getY(), point2DD.getX(), point2DD.getY() - height/4);
+
+		graphics2D.setStroke(new BasicStroke(1));
+		graphics2D.draw(box);
+		graphics2D.setStroke(new BasicStroke(4));
+		graphics2D.draw(lineA_1);
+		graphics2D.draw(lineA_2);
+		graphics2D.draw(lineB_1);
+		graphics2D.draw(lineB_2);
+		graphics2D.draw(lineC_1);
+		graphics2D.draw(lineC_2);
+		graphics2D.draw(lineD_1);
+		graphics2D.draw(lineD_2);
+	}
 }

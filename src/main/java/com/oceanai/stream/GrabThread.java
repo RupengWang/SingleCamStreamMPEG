@@ -7,7 +7,6 @@ import org.bytedeco.javacv.Java2DFrameConverter;
 
 import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.util.ArrayList;
 import java.util.concurrent.BlockingQueue;
 import java.util.logging.Logger;
 
@@ -18,7 +17,7 @@ public class GrabThread implements Runnable{
     private boolean running = false;
     private BlockingQueue<BufferedImage> bufferedImages;
     private int width, height;
-
+    private String rtspURL;
     private GrabThread() {}
 
     /**
@@ -32,14 +31,24 @@ public class GrabThread implements Runnable{
         this.bufferedImages = bufferedImages;
         this.width = width;
         this.height = height;
+        this.rtspURL = rtspURL;
+
+    }
+
+    public Point start() {
         grabber = new FFmpegFrameGrabber(rtspURL);
         grabber.setOption("rtsp_transport", "tcp");
+        Point point = new Point();
         try {
             grabber.start();
+            point.x = grabber.getImageWidth();
+            point.y = grabber.getImageHeight();
             running = true;
+            return point;
         } catch (FrameGrabber.Exception e) {
             System.out.println(e.getMessage());
         }
+        return null;
     }
 
     /**
@@ -52,15 +61,18 @@ public class GrabThread implements Runnable{
 
     @Override
     public void run() {
-        Frame frame;
         int count = 0;
-        BufferedImage bufferedImage;
         long start;
         logger.info("Start to grab frame");
+        grabber.setImageWidth(this.width);
+        grabber.setImageHeight(this.height);
+        int nullFrameCount = 0;
         try {
             while (running) {
+                Frame frame;
+                BufferedImage bufferedImage;
                 start = System.currentTimeMillis();
-                if ((frame = grabber.grabImage()) == null) {
+                if ((frame = grabber.grabImage()) == null) { //内存泄漏
                     continue;
                 }
                 if (bufferedImages == null) {
@@ -71,9 +83,9 @@ public class GrabThread implements Runnable{
                 bufferedImage = new BufferedImage(width, height, BufferedImage.TYPE_3BYTE_BGR);
                 Graphics graphics = bufferedImage.getGraphics();
                 graphics.drawImage(converter.getBufferedImage(frame), 0, 0, width, height, null);
-
-                bufferedImages.put(bufferedImage);
+                bufferedImages.offer(bufferedImage);
                 logger.info("Grab image " + count++  + " , time used " + (System.currentTimeMillis() - start) + " ms.");
+                frame = null;
             }
         } catch (Exception e) {
             System.out.println(e.getMessage());

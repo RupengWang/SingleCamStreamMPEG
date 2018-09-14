@@ -74,7 +74,9 @@ public class RecorderThread implements Runnable {
                 }
                 bufferedImage = bufferedImages.take();
 
-                frameRecorder.record(converter.convert(bufferedImage));
+                frameRecorder.record(converter.convert(bufferedImage)); //内存泄漏
+                bufferedImage.flush();
+                bufferedImage = null;
                 logger.info("Record one frame , time used " + (System.currentTimeMillis() - start) + "ms" + " remaining " + bufferedImages.size());
             }
         } catch (Exception e) {

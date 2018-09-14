@@ -3,22 +3,26 @@ package com.oceanai.model;
 public class SearchFeature {
 
     public BBox bbox;
-    public float score;
-    public String blackTableFaceUrl = "";
-    public float similarity = 0;
-    public String name = "";
-    public double blur = 0;
+    public double score;
     public LandMark landMark;
+    public double glassed;
+    public double quality;
+    public double sideFace;
+    public int width;
+    public int height;
 
     public SearchFeature(float[] arr) {
         bbox = new BBox(subArray(arr, 0, 4));
         score = arr[4];
     }
 
-    public  SearchFeature(int x1, int y1, int x2, int y2, int score, double blur, LandMark landMark) {
+    public  SearchFeature(int x1, int y1, int x2, int y2, double score, double quality, double sideFace, LandMark landMark) {
         bbox = new BBox(x1, y1, x2, y2);
+        this.width = Math.abs(x2 - x1);
+        this.height = Math.abs(y2 - y1);
         this.score = score;
-        this.blur = blur;
+        this.quality = quality;
+        this.sideFace = sideFace;
         this.landMark = landMark;
     }
 

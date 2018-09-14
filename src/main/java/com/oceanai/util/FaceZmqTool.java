@@ -15,6 +15,7 @@ public class FaceZmqTool {
     private ZContext context = new ZContext();
     private  ZMQ.Socket socket;
     private Gson gson = new Gson();
+    private int minFace;
     private FaceZmqTool() {}
     private static class FaceZmpToolManager {
         private static final FaceZmqTool instance = new FaceZmqTool();
@@ -66,11 +67,14 @@ public class FaceZmqTool {
 
 
     public List<SearchFeature> detect(String base64, int minFace) {
+        if (socket == null) {
+            return null;
+        }
         boolean sendResult = send(base64, minFace);
         if (sendResult) {
             String result = receiveResult();
+
             DetectResult detectResult = gson.fromJson(result, DetectResult.class);
-            FaceFeature[] faceFeatures = detectResult.getResult();
             List<SearchFeature> searchFeatures = new ArrayList<>(detectResult.getFace_nums());
             for (int i = 0;i < detectResult.getFace_nums();++i) {
                 FaceFeature faceFeature = detectResult.getResult()[i];
@@ -78,7 +82,7 @@ public class FaceZmqTool {
                 int y1 = faceFeature.getTop();
                 int x2 = x1 + faceFeature.getWidth();
                 int y2 = y1 + faceFeature.getHeight();
-                searchFeatures.add(new SearchFeature(x1, y1, x2, y2, 0, faceFeature.getScore(), faceFeature.getLandmark()));
+                searchFeatures.add(new SearchFeature(x1, y1, x2, y2, faceFeature.getScore(), faceFeature.getQuality(), faceFeature.getSideFace() , faceFeature.getLandmark()));
             }
             return searchFeatures;
         } else {
